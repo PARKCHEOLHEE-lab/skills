@@ -124,17 +124,62 @@ Suggest 3-5 follow-up questions for deeper exploration. These should be:
 
 After completing all deep-level steps (Steps 1–10), enter an iterative research loop that continues until the user-specified context target (N%) is reached.
 
+**CRITICAL — First-time setup (full mode only — skip for quick/standard/deep):**
+Before entering the loop, check if the PreToolUse guard hook is registered in the user's settings. Run:
+```
+bash ~/.claude/skills/outsource-research/scripts/setup-hook.sh
+```
+This script will:
+- Check if `~/.claude/settings.json` already has the guard hook registered
+- If not, register it automatically
+- Report whether the hook is active in the current session or will take effect on next session restart
+
+If the script reports `"status":"newly_registered"`, you MUST:
+1. Inform the user that the guard hook has been registered
+2. Ask the user to **exit the current session and restart** so the hook takes effect
+3. **Do NOT proceed with the full-mode loop** until the user restarts and re-invokes the skill
+
+Display this message:
+> "Guard hook has been newly registered in settings.json. A session restart is required for the hook to take effect.
+> Please exit with `/exit`, then relaunch and re-run `/outsource-research`.
+> (Proceeding without the hook may cause premature termination before the context target is reached.)"
+
+Then STOP. Do not continue with the research. Wait for the user to restart.
+
+If the script reports `"status":"already_registered"`, the hook is active — proceed normally.
+
+This setup is idempotent — running it multiple times is safe.
+
+**CRITICAL — Measuring context usage:**
+You MUST use the `check-context.sh` script to measure actual context usage. Do NOT rely on your own estimation — it is consistently inaccurate and leads to premature termination. Run the following Bash command to get the actual percentage:
+```
+bash ~/.claude/skills/outsource-research/scripts/check-context.sh
+```
+The script outputs JSON like `{"usage_pct": 16.7, "total_tokens": 166726, ...}`. Use the `usage_pct` field as the authoritative context usage number.
+
+**CRITICAL — State tracking:**
+At the START of the full-mode loop, create a state file by running:
+```
+echo '{"active":true,"target_pct":N}' > /tmp/outsource-research-state.json
+```
+(Replace N with the user's target percentage as an integer.)
+At the END of the loop (ONLY after `check-context.sh` confirms target is reached), remove it:
+```
+rm -f /tmp/outsource-research-state.json
+```
+
 **CRITICAL — No early termination:**
 The purpose of full mode is to ensure a minimum depth of research context that yields meaningful insights. The iterative loop MUST NOT terminate before reaching the target N%. Specifically:
 - Do NOT stop the loop just because the current report "feels complete" or "covers enough ground."
 - Do NOT stop because you ran out of obvious follow-up directions — generate new ones by broadening the search scope, exploring tangential domains, examining contradicting viewpoints, or diving deeper into technical details of already-found materials.
 - Do NOT stop because a single iteration produced low-yield results — try a different expansion vector and continue.
-- The ONLY valid reason to stop is reaching the target context percentage (N%).
-- After each iteration, explicitly state the estimated context usage percentage (e.g., "Current context usage: ~45% / Target: 90%") so progress toward the target is visible.
+- The ONLY valid reason to stop is when `check-context.sh` reports `usage_pct >= N`.
+- After each iteration, run `check-context.sh` and explicitly state the ACTUAL context usage percentage (e.g., "Current context usage: 23.4% / Target: 50% (measured via check-context.sh)") so progress toward the target is visible.
+- If you believe you have reached the target but `check-context.sh` says otherwise, TRUST THE SCRIPT and continue.
 
 **Loop procedure:**
 
-1. **Assess context usage** — After each iteration, estimate the current context consumption relative to the model's context limit. Stop ONLY when reaching ~N% (the user-specified target).
+1. **Assess context usage** — After each iteration, run `bash ~/.claude/skills/outsource-research/scripts/check-context.sh` and read the `usage_pct` from the JSON output. Stop ONLY when `usage_pct >= N` (the user-specified target).
 
 2. **Identify expansion vectors** — From the follow-up questions, related materials, and research chain, pick the most promising direction that hasn't been explored yet. Prioritize:
    - Primary sources referenced in the initial documents but not yet read
@@ -161,16 +206,16 @@ The purpose of full mode is to ensure a minimum depth of research context that y
    - Update the Cross-References section if new overlaps or conflicts emerge
    - Add new follow-up questions spawned by the discovery (replace already-explored ones)
 
-5. **Repeat** from step 2 until the target N% context threshold is reached. Do NOT exit the loop early.
+5. **Repeat** from step 2 until `check-context.sh` reports `usage_pct >= N`. Do NOT exit the loop early. Do NOT estimate — MEASURE.
 
 **Context budget allocation guidance:**
 - Spend roughly 40% of remaining context on ingesting new sources
 - Spend roughly 30% on analyzing connections and updating the report
 - Reserve roughly 30% for the final synthesis and output
 
-**Final synthesis** — When the loop ends (at N% context usage), add a `## Full-Mode Research Log` section to the output that lists:
+**Final synthesis** — When the loop ends (confirmed by `check-context.sh` that `usage_pct >= N`), first remove the state file (`rm -f /tmp/outsource-research-state.json`), then add a `## Full-Mode Research Log` section to the output that lists:
 - Total iterations completed
-- Target context percentage and estimated final context usage
+- Target context percentage and **actual** final context usage (from `check-context.sh`)
 - Sources ingested per iteration (title + type)
 - A brief narrative of how the research evolved across iterations (what threads were followed, what was discovered, what dead ends were hit)
 
@@ -223,11 +268,17 @@ Omit sections that don't apply to the chosen depth level.
 
 ## Memory integration
 
-After completing research:
+**IMPORTANT:** Do NOT ask about saving to memory during iterative research loops or mid-analysis. Memory save should only happen **once**, at the very end after all output is complete.
+
+After completing ALL research and outputting the final report:
 
 1. Check if prior `/outsource-research` results exist in memory
 2. If related prior research is found, add a **Connections to prior research** section noting overlaps or progressions
-3. Ask the user if they want to save key findings to memory for future reference
+3. Use the `AskUserQuestion` tool (NOT plain text) to ask whether to save key findings to memory. This presents an interactive UI where the user selects with arrow keys:
+   - Question: "Save key findings to memory for future sessions?"
+   - Option 1: "Yes — save key findings" with description "Saves a concise memory file with research topic, date, and top 3-5 non-obvious insights"
+   - Option 2: "No — skip" with description "Do not save anything to memory"
+4. If the user selects "Yes", save a single memory file summarizing the research topic and key non-obvious findings only. Do NOT save raw data, URLs, or information derivable from the source documents.
 
 ## Constraints
 
