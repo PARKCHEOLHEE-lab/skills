@@ -17,6 +17,7 @@ Read and analyze documents, extract insights, and research related materials.
   - `quick` — TL;DR + structured summary only
   - `standard` — summary + insights + key concepts + related materials
   - `deep` — full analysis including critical review, research chain, cross-references, and follow-up questions
+  - `full` — deep analysis + iterative research expansion until ~90% of session context is consumed
 
 ## Process
 
@@ -94,7 +95,7 @@ For each found material:
 - Type tag
 - One-line explanation of why it's relevant
 
-Target: 5-10 related materials for `standard`, 10-20 for `deep`.
+Target: 5-10 related materials for `standard`, 10-20 for `deep`, unlimited for `full`.
 
 ### Step 8: Research chain (deep only)
 
@@ -118,6 +119,42 @@ Suggest 3-5 follow-up questions for deeper exploration. These should be:
 
 - Specific enough to be actionable
 - Pointing in genuinely different directions (not variations of the same question)
+
+### Step 11: Iterative research expansion (full only)
+
+After completing all deep-level steps (Steps 1–10), enter an iterative research loop that continues until approximately 90% of the current session's context window is consumed.
+
+**Loop procedure:**
+
+1. **Assess context usage** — After each iteration, estimate the current context consumption relative to the model's context limit. Stop when reaching ~90%.
+
+2. **Identify expansion vectors** — From the follow-up questions, related materials, and research chain, pick the most promising direction that hasn't been explored yet. Prioritize:
+   - Primary sources referenced in the initial documents but not yet read
+   - High-relevance papers/articles found via WebSearch that weren't fully ingested
+   - Tangential domains that could offer transferable insights
+   - Contradicting viewpoints or competing approaches
+
+3. **Ingest and analyze** — For each expansion:
+   - Fetch and read the new source (WebFetch for URLs, Read for local files/PDFs)
+   - Write a mini-analysis (3-5 paragraphs) covering: what it adds, how it connects to the original sources, and any new insights or contradictions
+   - Add it to the Related Materials section with a `[Full-mode discovery]` tag
+
+4. **Update the report incrementally** — After each expansion:
+   - Append new findings to the appropriate sections (Related Materials, Research Chain, Insights)
+   - Update the Cross-References section if new overlaps or conflicts emerge
+   - Add new follow-up questions spawned by the discovery (replace already-explored ones)
+
+5. **Repeat** from step 2 until the ~90% context threshold is reached.
+
+**Context budget allocation guidance:**
+- Spend roughly 40% of remaining context on ingesting new sources
+- Spend roughly 30% on analyzing connections and updating the report
+- Reserve roughly 30% for the final synthesis and output
+
+**Final synthesis** — When the loop ends, add a `## Full-Mode Research Log` section to the output that lists:
+- Total iterations completed
+- Sources ingested per iteration (title + type)
+- A brief narrative of how the research evolved across iterations (what threads were followed, what was discovered, what dead ends were hit)
 
 ## Output format
 
@@ -157,7 +194,11 @@ Write the output as a structured markdown file. Use the following template:
 
 ## Cross-References                <!-- deep, multiple sources -->
 
-## Follow-up Questions             <!-- standard, deep -->
+## Follow-up Questions             <!-- standard, deep, full -->
+
+## Full-Mode Research Log          <!-- full -->
+### Iterations
+### Research Evolution Narrative
 ```
 
 Omit sections that don't apply to the chosen depth level.
