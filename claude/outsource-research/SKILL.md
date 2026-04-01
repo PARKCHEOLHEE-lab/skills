@@ -9,7 +9,7 @@ Read and analyze documents, extract insights, and research related materials.
 ## Usage
 
 ```
-/outsource-research <source> [--depth quick|standard|deep]
+/outsource-research <source> [--depth quick|standard|deep|full:N%]
 ```
 
 - `<source>` — URL, local file path, arXiv ID, GitHub repo URL, or multiple sources separated by spaces
@@ -17,7 +17,7 @@ Read and analyze documents, extract insights, and research related materials.
   - `quick` — TL;DR + structured summary only
   - `standard` — summary + insights + key concepts + related materials
   - `deep` — full analysis including critical review, research chain, cross-references, and follow-up questions
-  - `full` — deep analysis + iterative research expansion until ~90% of session context is consumed
+  - `full:N%` — deep analysis + iterative research expansion until N% of session context is consumed (e.g., `full:90%`, `full:50%`). **N% is required** — if `--depth=full` is given without a percentage, you MUST ask the user to specify a target percentage before proceeding. Example prompt: "You selected full mode. What percentage of context should be used? (e.g., 70%, 90%)"
 
 ## Process
 
@@ -122,17 +122,34 @@ Suggest 3-5 follow-up questions for deeper exploration. These should be:
 
 ### Step 11: Iterative research expansion (full only)
 
-After completing all deep-level steps (Steps 1–10), enter an iterative research loop that continues until approximately 90% of the current session's context window is consumed.
+After completing all deep-level steps (Steps 1–10), enter an iterative research loop that continues until the user-specified context target (N%) is reached.
+
+**CRITICAL — No early termination:**
+The purpose of full mode is to ensure a minimum depth of research context that yields meaningful insights. The iterative loop MUST NOT terminate before reaching the target N%. Specifically:
+- Do NOT stop the loop just because the current report "feels complete" or "covers enough ground."
+- Do NOT stop because you ran out of obvious follow-up directions — generate new ones by broadening the search scope, exploring tangential domains, examining contradicting viewpoints, or diving deeper into technical details of already-found materials.
+- Do NOT stop because a single iteration produced low-yield results — try a different expansion vector and continue.
+- The ONLY valid reason to stop is reaching the target context percentage (N%).
+- After each iteration, explicitly state the estimated context usage percentage (e.g., "Current context usage: ~45% / Target: 90%") so progress toward the target is visible.
 
 **Loop procedure:**
 
-1. **Assess context usage** — After each iteration, estimate the current context consumption relative to the model's context limit. Stop when reaching ~90%.
+1. **Assess context usage** — After each iteration, estimate the current context consumption relative to the model's context limit. Stop ONLY when reaching ~N% (the user-specified target).
 
 2. **Identify expansion vectors** — From the follow-up questions, related materials, and research chain, pick the most promising direction that hasn't been explored yet. Prioritize:
    - Primary sources referenced in the initial documents but not yet read
    - High-relevance papers/articles found via WebSearch that weren't fully ingested
    - Tangential domains that could offer transferable insights
    - Contradicting viewpoints or competing approaches
+   - Deep technical details of key technologies mentioned in the sources (e.g., model architectures, training methodologies, deployment strategies)
+   - Policy, legal, and regulatory dimensions not yet explored
+   - International case studies and benchmarks for comparison
+
+   If all obvious vectors are exhausted, generate new ones by:
+   - Combining two previously separate topics to find intersection insights
+   - Searching for the latest (current year) developments on key topics
+   - Looking for failure cases or critical perspectives on the main topic
+   - Exploring upstream/downstream implications (e.g., supply chain, end-user impact)
 
 3. **Ingest and analyze** — For each expansion:
    - Fetch and read the new source (WebFetch for URLs, Read for local files/PDFs)
@@ -144,15 +161,16 @@ After completing all deep-level steps (Steps 1–10), enter an iterative researc
    - Update the Cross-References section if new overlaps or conflicts emerge
    - Add new follow-up questions spawned by the discovery (replace already-explored ones)
 
-5. **Repeat** from step 2 until the ~90% context threshold is reached.
+5. **Repeat** from step 2 until the target N% context threshold is reached. Do NOT exit the loop early.
 
 **Context budget allocation guidance:**
 - Spend roughly 40% of remaining context on ingesting new sources
 - Spend roughly 30% on analyzing connections and updating the report
 - Reserve roughly 30% for the final synthesis and output
 
-**Final synthesis** — When the loop ends, add a `## Full-Mode Research Log` section to the output that lists:
+**Final synthesis** — When the loop ends (at N% context usage), add a `## Full-Mode Research Log` section to the output that lists:
 - Total iterations completed
+- Target context percentage and estimated final context usage
 - Sources ingested per iteration (title + type)
 - A brief narrative of how the research evolved across iterations (what threads were followed, what was discovered, what dead ends were hit)
 
