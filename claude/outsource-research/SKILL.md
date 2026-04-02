@@ -221,13 +221,17 @@ The purpose of full mode is to ensure a minimum depth of research context that y
 
 ## Output format
 
-Write the output as a structured markdown file. Use the following template:
+Write **two** markdown files and save them to the working directory:
+
+### 1. `research-output.md` — Summary report
+
+A concise report containing the core analysis. Use the following template:
 
 ```markdown
 # Research: {document title or topic}
 
 **Source:** {source URL or path}
-**Depth:** {quick|standard|deep}
+**Depth:** {quick|standard|deep|full:N%}
 **Date:** {YYYY-MM-DD}
 
 ## TL;DR
@@ -266,6 +270,25 @@ Write the output as a structured markdown file. Use the following template:
 
 Omit sections that don't apply to the chosen depth level.
 
+### 2. `research-output-full.md` — Detailed expanded report
+
+A comprehensive report that includes **all detailed findings from every research iteration**. This file must capture the full depth of analysis performed during the session — not just summaries, but the actual detailed content from each sub-agent research result. Structure it with numbered Parts:
+
+- **Part 1: Source Document Analysis** — Full summary with all tables, data points, and specifics from the original documents
+- **Part 2: Technology Deep-Dives** — Each technology topic gets its own subsection with full analysis (benchmarks, comparisons, code examples, architecture diagrams)
+- **Part 3: International Comparisons** — Country-by-country analysis with tables
+- **Part 4: Domain Ecosystem Analysis** — Startups, government programs, academic research, industry benchmarks
+- **Part 5: Economic Analysis** — ROI data, cost projections, market sizing, budget breakdowns
+- **Part 6: Implementation Guide** — Tech stack, data pipeline, deployment strategy, infrastructure, timeline
+- **Part 7: Use Case Deep-Dives** — Each PoC item or use case gets detailed technical analysis
+- **Part 8: Organizational/Legal/Ethics** — Change management, liability, governance, XAI, security
+- **Part 9: Future Technology Outlook** — Emerging tech timeline, 2030 vision, strategic positioning
+- **Part 10: Synthesis & Conclusions** — Key findings table, strategic recommendations, follow-up questions
+
+Adapt the Part titles to match the actual research topic. Not all Parts apply to every research — include only Parts that have substantial content. The key requirement is: **every detailed finding from the iterative research loop must appear in this file**. If a sub-agent produced a 500-word analysis on a topic, that analysis should be captured in the full report, not discarded.
+
+For `quick` depth, only `research-output.md` is generated (no full report needed).
+
 ## Memory integration
 
 **IMPORTANT:** Do NOT ask about saving to memory during iterative research loops or mid-analysis. Memory save should only happen **once**, at the very end after all output is complete.
@@ -286,4 +309,4 @@ After completing ALL research and outputting the final report:
 - If a search returns no useful results for a category, say so rather than forcing low-quality matches
 - Prefer primary sources (original papers, official repos) over secondary summaries
 - When the source language differs from the user's language, write the output in the user's language
-- Do NOT commit any output files — let the user decide where to save
+- Save output files (`research-output.md` and `research-output-full.md`) to the current working directory using the Write tool. Do NOT commit them to git — let the user decide.
