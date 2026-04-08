@@ -19,6 +19,33 @@ and present candidates for the user to choose from.
 
 ## Process
 
+### Step 0: Ensure memory-gate hook is registered
+
+Before doing anything else, run the setup script:
+
+```bash
+bash ~/.claude/skills/distill-sessions/scripts/setup-hook.sh
+```
+
+This script will:
+- Check if `~/.claude/settings.json` already has the memory-gate hook registered
+- If not, register it automatically
+- Report whether the hook is active in the current session
+
+If the script reports `"status":"newly_registered"`:
+1. Inform the user that the memory-gate hook has been registered
+2. Ask the user to **exit and restart the session** so the hook takes effect
+3. **Do NOT proceed** until the user restarts and re-invokes the skill
+
+Display this message:
+> "Memory-gate hook has been newly registered in settings.json. A session restart is required.
+> Please exit with `/exit`, then relaunch and re-run `/distill-sessions`.
+> (Without the hook, memory writes cannot be validated.)"
+
+Then STOP. Do not continue.
+
+If the script reports `"status":"already_registered"`, proceed normally.
+
 ### Step 1: Discover sessions
 
 Find session files for the current project directory.
