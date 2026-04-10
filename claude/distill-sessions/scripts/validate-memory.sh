@@ -36,6 +36,14 @@ if [[ "$IS_MEMORY" != "true" ]]; then
   exit 0
 fi
 
+# Auto-backup CLAUDE.md before modification
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+case "$FILE_PATH" in
+  */.claude/CLAUDE.md)
+    "$SCRIPT_DIR/snapshot-claude-md.sh" "$FILE_PATH"
+    ;;
+esac
+
 # Skip MEMORY.md index file (just pointers, not actual memory content)
 BASENAME=$(basename "$FILE_PATH")
 if [[ "$BASENAME" == "MEMORY.md" ]]; then
@@ -81,16 +89,29 @@ fi
 # Check 2: Semantic validation via haiku
 # ──────────────────────────────────────────────
 CONTENT=$(echo "$INPUT" | jq -r '.tool_input.content // .tool_input.new_string // empty' 2>/dev/null) || exit 0
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null) || TOOL_NAME=""
+OLD_STRING=$(echo "$INPUT" | jq -r '.tool_input.old_string // empty' 2>/dev/null) || OLD_STRING=""
 
 if [[ -z "$CONTENT" ]]; then
   exit 0
 fi
 
+# Strictness level: low / medium (default) / high
+# Set via: export MEMORY_GATE_STRICTNESS=low
+STRICTNESS="${MEMORY_GATE_STRICTNESS:-medium}"
+
 # Count content lines (excluding frontmatter)
 BODY=$(echo "$CONTENT" | sed '/^---$/,/^---$/d')
 LINE_COUNT=$(echo "$BODY" | grep -c '[^[:space:]]' || echo "0")
 
-# Collect existing memories for duplicate check
+# Set line limit based on strictness
+case "$STRICTNESS" in
+  low)  MAX_LINES=15 ;;
+  high) MAX_LINES=5 ;;
+  *)    MAX_LINES=10 ;;
+esac
+
+# Collect existing memories for context
 EXISTING_MEMORIES=""
 PARENT_DIR="$(dirname "$FILE_PATH")"
 if [[ "$(basename "$PARENT_DIR")" == "memory" ]]; then
@@ -103,7 +124,8 @@ fi
 
 if [[ -n "$MEMORY_DIR" && -d "$MEMORY_DIR" ]]; then
   for f in "$MEMORY_DIR"/*.md; do
-    if [[ -f "$f" && "$(basename "$f")" != "MEMORY.md" ]]; then
+    # Skip the file being modified and MEMORY.md index
+    if [[ -f "$f" && "$(basename "$f")" != "MEMORY.md" && "$f" != "$FILE_PATH" ]]; then
       EXISTING_MEMORIES+="--- $(basename "$f") ---"$'\n'
       EXISTING_MEMORIES+="$(head -20 "$f")"$'\n'
     fi
@@ -111,36 +133,71 @@ if [[ -n "$MEMORY_DIR" && -d "$MEMORY_DIR" ]]; then
 fi
 
 GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
-if [[ -f "$GLOBAL_CLAUDE" ]]; then
+# Skip if CLAUDE.md is the file being modified
+if [[ -f "$GLOBAL_CLAUDE" && "$FILE_PATH" != "$GLOBAL_CLAUDE" ]]; then
   EXISTING_MEMORIES+="--- CLAUDE.md ---"$'\n'
   EXISTING_MEMORIES+="$(cat "$GLOBAL_CLAUDE")"$'\n'
 fi
+
+# Build strictness-specific guidance
+case "$STRICTNESS" in
+  low)
+    STRICTNESS_GUIDE="You are in LENIENT mode. Be generous — only block content that is clearly junk, completely derivable from code/git, or exact word-for-word duplicates with no new information."
+    ;;
+  high)
+    STRICTNESS_GUIDE="You are in STRICT mode. Block content that is derivable from the codebase, loosely overlaps with existing memories without meaningful improvement, or exceeds $MAX_LINES lines."
+    ;;
+  *)
+    STRICTNESS_GUIDE="You are in BALANCED mode. Allow content that adds value. Only block content that is clearly derivable from code/git or is an exact duplicate with zero new information."
+    ;;
+esac
 
 # Write prompt to temp file to avoid shell escaping issues
 PROMPT_FILE=$(mktemp)
 trap 'rm -f "$PROMPT_FILE"' EXIT
 
+EDIT_CONTEXT=""
+if [[ "$TOOL_NAME" == "Edit" && -n "$OLD_STRING" ]]; then
+  EDIT_CONTEXT="## Operation: Edit (updating existing content)
+This is an UPDATE to an existing file, NOT a new memory. The old content is being replaced with new content.
+
+### Old content (being replaced):
+$OLD_STRING
+
+### New content (replacement):
+$CONTENT"
+fi
+
 cat > "$PROMPT_FILE" <<PROMPT_END
 You are a memory validation gate. Evaluate whether this content is appropriate to save as a Claude Code memory.
 
-## Content to validate:
-$CONTENT
+$STRICTNESS_GUIDE
 
-## Existing memories (check for duplicates):
+$(if [[ -n "$EDIT_CONTEXT" ]]; then echo "$EDIT_CONTEXT"; else echo "## Content to validate:
+$CONTENT"; fi)
+
+## Existing memories (for context):
 $EXISTING_MEMORIES
 
 ## Rules — BLOCK if ANY of these apply:
-1. Contains code patterns, file paths, or architecture details (derivable from codebase)
-2. Contains git history or debugging solutions (derivable from git)
-3. Duplicates or substantially overlaps with existing memories
-4. Content body exceeds 5 meaningful lines (current: $LINE_COUNT lines)
-5. Contains ephemeral task details only useful in current conversation
+1. Contains ONLY code patterns, file paths, or architecture details (derivable from codebase)
+2. Contains ONLY git history or debugging solutions (derivable from git)
+3. Content body exceeds $MAX_LINES meaningful lines (current: $LINE_COUNT lines)
+4. Contains ONLY ephemeral task details with no future value
 
-## Rules — ALLOW if:
+## Rules — ALLOW if ANY of these apply:
 - User preferences, work style, role information
 - Feedback/corrections about how Claude should work
 - Non-obvious project context (goals, deadlines, decisions)
 - External system references (dashboards, ticket trackers)
+- Content that UPDATES or IMPROVES existing memories (overlap is OK if it refines, consolidates, or adds new detail)
+- Content being written to the SAME file it already exists in (this is an update, not a duplicate)
+
+## Important:
+- Overlap with existing memories is NOT a reason to block. Repetition signals importance.
+- If the new content improves, refines, or consolidates existing information, ALLOW it.
+- If the operation is an Edit (update), the new content will naturally overlap with the file being edited — do NOT treat overlap with the SAME file as duplication. Only block if the new content is a duplicate of a DIFFERENT memory file.
+- When in doubt, ALLOW. The user has already confirmed they want to save this.
 
 Respond with ONLY a JSON object, no markdown fences:
 {"approved": true}
@@ -149,9 +206,14 @@ or
 PROMPT_END
 
 # Call haiku for validation (fail-open on any error)
-RESULT=$(claude -p --model haiku --no-session-persistence "$(cat "$PROMPT_FILE")" 2>/dev/null) || {
+RESULT=$(claude -p --model sonnet --no-session-persistence "$(cat "$PROMPT_FILE")" 2>/dev/null) || {
   exit 0
 }
+
+# Log haiku response for debugging
+LOG_DIR="$HOME/.claude/logs"
+mkdir -p "$LOG_DIR"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] file=$BASENAME result=$RESULT" >> "$LOG_DIR/memory-gate.log"
 
 # Parse result — fail-open if parsing fails
 APPROVED=$(echo "$RESULT" | grep -o '"approved":\s*\(true\|false\)' | head -1 | grep -o 'true\|false') || {
