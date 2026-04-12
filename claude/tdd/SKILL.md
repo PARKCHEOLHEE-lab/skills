@@ -11,6 +11,17 @@ description: >
 
 # TDD Protocol (Red-Green-Refactor)
 
+## CRITICAL: Skill activation is the source of truth
+
+**If you are doing any TDD-shaped work — KR decomposition, RED/GREEN/REFACTOR cycles, writing failing tests, etc. — you MUST have invoked this skill via `Skill(tdd)` first.**
+
+The skill is what creates `/tmp/tdd-kr-state.json`. Without that file:
+- The guard hook (`tdd-guard-kr.sh`) cannot enforce loop completion
+- The statusline tree (`tdd-statusline.sh`) will not appear
+- The user has no live visibility into KR progress
+
+If you find yourself in the middle of coding work and realize you started doing TDD-style work without invoking this skill: **STOP, invoke `Skill(tdd)` now**, then construct the state file from your in-progress KR list before continuing. Do not silently work around the skill — that defeats every guarantee the protocol is designed to provide.
+
 ## Step 0: Verify Hook Setup
 
 Before executing the skill, always run the setup script:
