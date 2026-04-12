@@ -179,10 +179,34 @@ Run sessions in parallel where possible (up to 3 concurrent).
 
 ### Step 3: Deduplicate and merge
 
-- Combine candidates from all sessions
-- Remove duplicates (same core information)
-- Remove candidates that overlap with existing memories (check `memory/MEMORY.md` and `~/.claude/CLAUDE.md`)
-- Group by type (user, feedback, project, reference)
+Chunked extraction (Pass 2) often produces many near-duplicate candidates
+because each chunk is processed independently and the same fact may surface
+across several chunks. Run an LLM-based dedup pass to collapse them before
+presenting to the user:
+
+```bash
+# Write all candidates from every session into a single JSON array file,
+# then run the dedup pass. The script returns only the merged result and
+# never calls the LLM when the input is empty.
+ALL_CANDS=$(mktemp --suffix=.json)
+DEDUPED=$(mktemp --suffix=.json)
+echo "$COMBINED_CANDIDATES_JSON" > "$ALL_CANDS"
+
+python3 ~/.claude/skills/distill-sessions/scripts/dedup_candidates.py \
+  --input "$ALL_CANDS" \
+  --output "$DEDUPED" \
+  --model sonnet
+
+RESULT=$(cat "$DEDUPED")
+rm -f "$ALL_CANDS" "$DEDUPED"
+```
+
+After the LLM dedup pass:
+
+- Remove candidates that overlap with existing memories (check `memory/MEMORY.md` and `~/.claude/CLAUDE.md`) — this check stays on the Claude side, not the dedup script, because it requires reading local memory files.
+- Group the result by type (user, feedback, project, reference) for presentation in Step 4.
+
+The dedup script merges semantically duplicate candidates, keeps the richest phrasing for each field, and outputs a JSON array of objects with exactly `type`, `title`, `content`, `why`. It's a pure post-processing step — the input file is never mutated.
 
 ### Step 4: Present candidates to user
 
