@@ -4,6 +4,7 @@ user_invocable: true
 description: >
   Test-Driven Development protocol. Decomposes requirements into Key Results,
   then loops Red-Green-Refactor per KR with isolated subagents.
+  Failed KRs are recursively decomposed into smaller sub-KRs (max depth 3).
   Auto-triggers on coding tasks (implementation, feature additions, bug fixes, refactoring).
   Does NOT trigger on documentation, configuration changes, or code explanations.
 ---
@@ -29,7 +30,7 @@ Before writing any code, analyze the user's requirements and derive **measurable
 
 Each KR must be:
 - **Testable** — can be verified by a single test or small test group
-- **Independent** — can be implemented without completing other KRs first (where possible)
+- **Independent** — can be implemented without completing other KRs first (where possible; use mocks for dependencies)
 - **Small** — one RED→GREEN→REFACTOR cycle should complete it
 
 Present the KR list to the user for confirmation:
@@ -54,9 +55,9 @@ Proceed with these KRs? (adjust/add/remove as needed)
 cat > /tmp/tdd-kr-state.json <<'STATEEOF'
 {
   "krs": [
-    {"id": 1, "desc": "KR1 description", "done": false},
-    {"id": 2, "desc": "KR2 description", "done": false},
-    {"id": 3, "desc": "KR3 description", "done": false}
+    {"id": 1, "desc": "KR1 description", "done": false, "depth": 0},
+    {"id": 2, "desc": "KR2 description", "done": false, "depth": 0},
+    {"id": 3, "desc": "KR3 description", "done": false, "depth": 0}
   ]
 }
 STATEEOF
@@ -90,7 +91,7 @@ Agent({
 
 **Do NOT proceed to GREEN until test failure is confirmed.**
 
-If the test fails to compile or fails for the wrong reason, fix and retry (max 3 attempts). If still failing after 3 attempts, report to the user and ask for guidance.
+If the test fails to compile or fails for the wrong reason, fix and retry (max 3 attempts).
 
 ### Phase 2: GREEN — Minimal Implementation
 
@@ -115,7 +116,7 @@ Agent({
 
 **Do NOT proceed to REFACTOR until the test passes.**
 
-If the test still fails after implementation, fix and retry (max 3 attempts). If still failing, report to the user.
+If the test still fails after implementation, fix and retry (max 3 attempts).
 
 ### Phase 3: REFACTOR — Improve
 
@@ -166,6 +167,70 @@ jq '.krs[N].done = true' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && 
 
 3. **Proceed to the next KR immediately.** Do NOT stop or wait for user input between KRs.
 
+## Recursive Decomposition on Failure
+
+When a KR fails after 3 retry attempts in any phase (RED, GREEN, or REFACTOR), do NOT report to the user immediately. Instead, **recursively apply the TDD protocol** to the failed KR:
+
+1. **Analyze the failure** — identify why the KR is too complex or what specific part is failing
+2. **Decompose the failed KR into smaller sub-KRs** (max 5 sub-KRs per decomposition)
+3. **Apply RED→GREEN→REFACTOR to each sub-KR**
+4. After all sub-KRs pass, **re-run the original KR's test** to confirm it now passes
+5. Update the state file:
+
+```bash
+# Add sub-KRs to state file
+jq '.krs += [{"id": "3.1", "desc": "sub-KR description", "done": false, "depth": 1}]' \
+  /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && \
+  mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+```
+
+### Recursion limits
+
+| Limit | Value | On exceed |
+|-------|-------|-----------|
+| Max recursion depth | 3 levels | Report to user with failure analysis |
+| Max sub-KRs per decomposition | 5 | If more needed, the KR scope is too large — ask user to narrow |
+
+### Example
+
+```
+KR3: JWT token issuance — RED fails (3 retries exhausted)
+  │
+  ▼ Decompose KR3 → sub-KRs (depth 1)
+  │
+  ├─ KR3.1: Token payload generation    RED→GREEN→REFACTOR ✅
+  ├─ KR3.2: Signing and expiry          RED→GREEN→REFACTOR ✅
+  └─ KR3.3: Token verification          RED→GREEN→REFACTOR ❌ (3 retries)
+      │
+      ▼ Decompose KR3.3 → sub-KRs (depth 2)
+      │
+      ├─ KR3.3.1: Expiry validation     RED→GREEN→REFACTOR ✅
+      └─ KR3.3.2: Signature validation  RED→GREEN→REFACTOR ✅
+      │
+      ▼ Re-run KR3.3 original test → ✅
+  │
+  ▼ Re-run KR3 original test → ✅
+```
+
+If depth 3 is reached and a sub-KR still fails, **then** report to the user:
+
+```
+## KR Failure Report
+
+KR3.3.2: Signature validation — failed after recursive decomposition (depth 3)
+
+### Attempts
+- Depth 0: KR3 (JWT token issuance) — RED failed
+- Depth 1: KR3.3 (Token verification) — GREEN failed
+- Depth 2: KR3.3.2 (Signature validation) — RED failed
+
+### Failure analysis
+[What specifically failed and why]
+
+### Recommendation
+[Suggested next steps for the user]
+```
+
 ## Step 3: Final Validation
 
 After all KRs are complete:
@@ -196,6 +261,7 @@ Full test suite: ✅ All passing
 - Write tests **one at a time** — writing in bulk risks the LLM rewriting tests to match the implementation
 - For bug fixes, **write a reproduction test first** before fixing
 - Isolate each phase in a separate subagent to prevent context pollution
+- When a KR is too complex, decompose it recursively rather than brute-force retrying
 
 ## Prohibited Actions
 
@@ -204,3 +270,4 @@ Full test suite: ✅ All passing
 - Do NOT skip the REFACTOR evaluation
 - Do NOT start a new KR before completing the current cycle
 - Do NOT write tests in bulk
+- Do NOT exceed recursion depth 3 — report to user instead
