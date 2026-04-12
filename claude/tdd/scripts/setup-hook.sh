@@ -1,85 +1,94 @@
 #!/bin/bash
-# setup-hook.sh — Idempotent setup for TDD detect hook
-# Checks if the tdd-detect hook is registered in settings.json; if not, registers it.
+# setup-hook.sh — Idempotent setup for TDD hooks
+# Registers two hooks in settings.json if not already present:
+#   1. UserPromptSubmit: tdd-detect.sh (context-based TDD activation)
+#   2. PreToolUse: tdd-guard-kr.sh (blocks final report until all KRs done)
 #
 # Output: JSON with status information
 # Safe to run multiple times.
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
-HOOK_CMD="bash ~/.claude/skills/tdd/scripts/tdd-detect.sh"
-HOOK_IDENTIFIER="tdd-detect.sh"
-SCRIPT_PATH="$HOME/.claude/skills/tdd/scripts/tdd-detect.sh"
+SKILL_DIR="$HOME/.claude/skills/tdd/scripts"
 
 # Ensure settings.json exists
 if [ ! -f "$SETTINGS_FILE" ]; then
   echo '{"hooks":{}}' > "$SETTINGS_FILE"
 fi
 
-# Check if the hook script exists
-if [ ! -f "$SCRIPT_PATH" ]; then
-  echo "{\"status\":\"error\",\"message\":\"tdd-detect.sh not found at $SCRIPT_PATH. Install the tdd skill first.\"}"
-  exit 0
-fi
+# Check both scripts exist
+for SCRIPT in tdd-detect.sh tdd-guard-kr.sh; do
+  if [ ! -f "$SKILL_DIR/$SCRIPT" ]; then
+    echo "{\"status\":\"error\",\"message\":\"$SCRIPT not found at $SKILL_DIR/$SCRIPT. Install the tdd skill first.\"}"
+    exit 0
+  fi
+done
 
-# Check if the hook is already registered
-HOOK_EXISTS=$(python3 -c "
+# Check and register both hooks
+RESULT=$(python3 -c "
 import json, sys
-try:
-    with open('$SETTINGS_FILE') as f:
-        settings = json.load(f)
-    hooks = settings.get('hooks', {})
-    user_prompt = hooks.get('UserPromptSubmit', [])
-    for entry in user_prompt:
-        for h in entry.get('hooks', []):
-            if '$HOOK_IDENTIFIER' in h.get('command', ''):
-                print('yes')
-                sys.exit(0)
-    print('no')
-except Exception as e:
-    print('error:' + str(e))
-" 2>/dev/null)
-
-if [ "$HOOK_EXISTS" = "yes" ]; then
-  echo '{"status":"already_registered","hook_active_this_session":true,"message":"TDD detect hook is already registered in settings.json."}'
-  exit 0
-fi
-
-if echo "$HOOK_EXISTS" | grep -q "^error:"; then
-  echo "{\"status\":\"error\",\"message\":\"Failed to read settings.json: $HOOK_EXISTS\"}"
-  exit 0
-fi
-
-# Hook not registered — add it
-python3 -c "
-import json
 
 settings_path = '$SETTINGS_FILE'
-hook_cmd = '$HOOK_CMD'
+skill_dir = '$SKILL_DIR'
 
 with open(settings_path) as f:
     settings = json.load(f)
 
 hooks = settings.setdefault('hooks', {})
+changed = False
+
+# Hook 1: UserPromptSubmit — tdd-detect.sh
 user_prompt = hooks.setdefault('UserPromptSubmit', [])
+detect_exists = any(
+    'tdd-detect.sh' in h.get('command', '')
+    for entry in user_prompt
+    for h in entry.get('hooks', [])
+)
+if not detect_exists:
+    user_prompt.append({
+        'matcher': '',
+        'hooks': [{
+            'type': 'command',
+            'command': f'bash {skill_dir}/tdd-detect.sh',
+            'timeout': 5000
+        }]
+    })
+    changed = True
 
-user_prompt.append({
-    'matcher': '',
-    'hooks': [{
-        'type': 'command',
-        'command': hook_cmd,
-        'timeout': 5000
-    }]
-})
+# Hook 2: PreToolUse — tdd-guard-kr.sh
+pre_tool = hooks.setdefault('PreToolUse', [])
+guard_exists = any(
+    'tdd-guard-kr.sh' in h.get('command', '')
+    for entry in pre_tool
+    for h in entry.get('hooks', [])
+)
+if not guard_exists:
+    pre_tool.append({
+        'matcher': 'Write|Edit',
+        'hooks': [{
+            'type': 'command',
+            'command': f'bash {skill_dir}/tdd-guard-kr.sh',
+            'timeout': 10000
+        }]
+    })
+    changed = True
 
-with open(settings_path, 'w') as f:
-    json.dump(settings, f, indent=2, ensure_ascii=False)
-    f.write('\n')
+if changed:
+    with open(settings_path, 'w') as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+    print('newly_registered')
+else:
+    print('already_registered')
+" 2>/dev/null)
 
-print('ok')
-" 2>/dev/null
-
-if [ $? -eq 0 ]; then
-  echo '{"status":"newly_registered","hook_active_this_session":false,"message":"TDD detect hook registered in settings.json. Session restart required for the hook to take effect."}'
-else
-  echo '{"status":"error","message":"Failed to update settings.json."}'
-fi
+case "$RESULT" in
+  "already_registered")
+    echo '{"status":"already_registered","hook_active_this_session":true,"message":"Both TDD hooks (detect + guard) are already registered."}'
+    ;;
+  "newly_registered")
+    echo '{"status":"newly_registered","hook_active_this_session":false,"message":"TDD hooks registered in settings.json. Session restart required for hooks to take effect."}'
+    ;;
+  *)
+    echo "{\"status\":\"error\",\"message\":\"Failed to update settings.json: $RESULT\"}"
+    ;;
+esac

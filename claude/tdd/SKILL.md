@@ -46,7 +46,23 @@ Proceed with these KRs? (adjust/add/remove as needed)
 
 **Constraints:**
 - Maximum 10 KRs per request. If more are needed, ask the user to narrow the scope.
-- If the user adjusts KRs mid-loop, update the list and continue from where you left off.
+- If the user adjusts KRs mid-loop, update the state file and continue from where you left off.
+
+**After user confirms KRs, create the state file:**
+
+```bash
+cat > /tmp/tdd-kr-state.json <<'STATEEOF'
+{
+  "krs": [
+    {"id": 1, "desc": "KR1 description", "done": false},
+    {"id": 2, "desc": "KR2 description", "done": false},
+    {"id": 3, "desc": "KR3 description", "done": false}
+  ]
+}
+STATEEOF
+```
+
+This state file is checked by the guard hook — writing the final "TDD Complete" report is **blocked** until all KRs are marked `done`.
 
 ## Step 2: Loop — RED → GREEN → REFACTOR per KR
 
@@ -127,7 +143,17 @@ Agent({
 })
 ```
 
-### After each KR cycle, report progress:
+### After each KR cycle:
+
+1. **Update the state file** to mark the KR as done:
+
+```bash
+jq '.krs[N].done = true' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+```
+
+(Replace N with the zero-based index of the completed KR.)
+
+2. **Report progress:**
 
 ```
 ## Progress
@@ -138,14 +164,19 @@ Agent({
 - [ ] KR4: [description]
 ```
 
-Then proceed to the next KR.
+3. **Proceed to the next KR immediately.** Do NOT stop or wait for user input between KRs.
 
 ## Step 3: Final Validation
 
 After all KRs are complete:
 
-1. Run the **full test suite** to catch regressions
-2. Report final status:
+1. **Remove the state file:**
+```bash
+rm -f /tmp/tdd-kr-state.json
+```
+
+2. Run the **full test suite** to catch regressions
+3. Report final status:
 
 ```
 ## TDD Complete
