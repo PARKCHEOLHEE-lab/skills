@@ -70,13 +70,19 @@ If no sessions are found, inform the user and stop.
 
 ### Step 2: Extract memory candidates from each session
 
-For each discovered session, resume it with `claude -p --resume <session-id>` and ask it to extract memory-worthy content.
+For each discovered session, try the fast `--resume` path first, and fall
+back to lossless chunking if the session is too large to load.
+
+**Pass 1 — `--resume` (fast path).** Works for small/medium sessions where
+the entire conversation fits in the model's context window. If this fails
+with `Prompt is too long` (or similar size error), proceed to Pass 2.
 
 ```bash
-# Retry logic: sonnet 5 attempts → fallback to haiku 5 attempts
+# Pass 1: try --resume with sonnet 5 attempts → haiku 5 attempts on transient errors
 MODEL="sonnet"
 MAX_RETRIES=5
 RESULT=""
+TOO_LONG=0
 
 for attempt in $(seq 1 $MAX_RETRIES); do
   RESULT=$(claude -p --resume <session-id> \
@@ -84,12 +90,15 @@ for attempt in $(seq 1 $MAX_RETRIES); do
     --allowedTools "Read Grep Glob" \
     --model $MODEL \
     "<extraction prompt below>" 2>&1) && break
+  if [[ "$RESULT" == *"Prompt is too long"* ]]; then
+    TOO_LONG=1
+    break
+  fi
   echo "sonnet attempt $attempt failed, retrying..." >&2
   sleep 2
 done
 
-# If sonnet failed all 5, fallback to haiku
-if [[ -z "$RESULT" || "$RESULT" == *"overloaded"* || "$RESULT" == *"Error"* ]]; then
+if [[ $TOO_LONG -eq 0 ]] && [[ -z "$RESULT" || "$RESULT" == *"overloaded"* || "$RESULT" == *"Error"* ]]; then
   MODEL="haiku"
   for attempt in $(seq 1 $MAX_RETRIES); do
     RESULT=$(claude -p --resume <session-id> \
@@ -97,11 +106,44 @@ if [[ -z "$RESULT" || "$RESULT" == *"overloaded"* || "$RESULT" == *"Error"* ]]; 
       --allowedTools "Read Grep Glob" \
       --model $MODEL \
       "<extraction prompt below>" 2>&1) && break
+    if [[ "$RESULT" == *"Prompt is too long"* ]]; then
+      TOO_LONG=1
+      break
+    fi
     echo "haiku attempt $attempt failed, retrying..." >&2
     sleep 2
   done
 fi
 ```
+
+**Pass 2 — chunking (lossless fallback).** When `TOO_LONG=1`, chunk the
+raw `.jsonl` losslessly and extract per chunk with a sliding-window summary:
+
+```bash
+if [[ $TOO_LONG -eq 1 ]]; then
+  # 1) Chunk the session (lossless: keeps everything except file-history-snapshot,
+  #    splits oversized single messages with [LARGE MESSAGE k/N] markers).
+  CHUNKS_DIR=$(mktemp -d)
+  python3 ~/.claude/skills/distill-sessions/scripts/chunk_and_extract.py \
+    "$SESSION_JSONL" --out-dir "$CHUNKS_DIR" --max-chars 80000 --overlap 2
+
+  # 2) Extract candidates per chunk with cumulative summary.
+  RESULT=$(bash ~/.claude/skills/distill-sessions/scripts/extract-from-chunks.sh \
+    "$CHUNKS_DIR" sonnet)
+
+  rm -rf "$CHUNKS_DIR"
+fi
+```
+
+The chunker enforces:
+- 80K char chunks, never splitting a message at its boundary
+- 2-message overlap between chunks for boundary context
+- Single oversized messages broken into `[LARGE MESSAGE k/N]` parts (no truncation)
+
+`extract-from-chunks.sh` calls `claude -p` per chunk in order, prepending a
+running 2K-char summary of prior chunks so the model keeps cross-chunk
+continuity without re-reading earlier content. Output is a merged JSON
+array of candidates from all chunks.
 
 **Extraction prompt:**
 
