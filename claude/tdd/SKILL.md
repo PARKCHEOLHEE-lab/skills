@@ -33,7 +33,7 @@ Each KR must be:
 - **Independent** — can be implemented without completing other KRs first (where possible; use mocks for dependencies)
 - **Small** — one RED→GREEN→REFACTOR cycle should complete it
 
-Present the KR list to the user for confirmation:
+Present the KR list to the user and confirm using the **AskUserQuestion tool** (interactive terminal UI, NOT plain text):
 
 ```
 ## Key Results for: [feature name]
@@ -41,29 +41,99 @@ Present the KR list to the user for confirmation:
 1. KR1: [description] — [how it will be tested]
 2. KR2: [description] — [how it will be tested]
 3. KR3: [description] — [how it will be tested]
-
-Proceed with these KRs? (adjust/add/remove as needed)
 ```
+
+Then call `AskUserQuestion` with the KR list as the question body and these four options:
+- **Proceed (Recommended)** — Start the TDD loop with these KRs as-is
+- **Adjust** — Modify descriptions or test criteria for existing KRs
+- **Add KR** — Add more KRs
+- **Remove KR** — Remove one or more KRs
+
+Only after the user selects "Proceed" (or resolves Adjust/Add/Remove), create the state file and start the loop.
 
 **Constraints:**
 - Maximum 10 KRs per request. If more are needed, ask the user to narrow the scope.
 - If the user adjusts KRs mid-loop, update the state file and continue from where you left off.
 
-**After user confirms KRs, create the state file:**
+**After user confirms KRs, initialize BOTH tracking systems:**
+
+1. **Create the state file** (read by both the guard hook AND the statusline renderer):
 
 ```bash
 cat > /tmp/tdd-kr-state.json <<'STATEEOF'
 {
   "krs": [
-    {"id": 1, "desc": "KR1 description", "done": false, "depth": 0},
-    {"id": 2, "desc": "KR2 description", "done": false, "depth": 0},
-    {"id": 3, "desc": "KR3 description", "done": false, "depth": 0}
+    {"id": "1", "desc": "KR1 description", "depth": 0, "status": "pending"},
+    {"id": "2", "desc": "KR2 description", "depth": 0, "status": "pending"},
+    {"id": "3", "desc": "KR3 description", "depth": 0, "status": "pending"}
   ]
 }
 STATEEOF
 ```
 
-This state file is checked by the guard hook — writing the final "TDD Complete" report is **blocked** until all KRs are marked `done`.
+**State file schema:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | KR identifier (use dotted notation for sub-KRs: `"4.2"`) |
+| `desc` | string | yes | Short description shown in statusline |
+| `depth` | number | yes | Recursion depth (0 for top-level KRs, 1+ for sub-KRs) |
+| `status` | `"pending"` \| `"in_progress"` \| `"completed"` | yes | Current state |
+| `done` | boolean | no | Legacy — set `true` when `status` is `"completed"` (guard hook compatibility) |
+| `decomposing` | boolean | no | `true` when this KR is being recursively decomposed |
+| `retry` | `{ phase, count, max }` | no | Present while retrying: `{"phase": "RED", "count": 2, "max": 3}` |
+
+**State update patterns** (use jq to mutate the file):
+
+```bash
+# Mark KR as in_progress
+jq '(.krs[] | select(.id == "4")).status = "in_progress"' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+
+# Mark KR as completed (set both status AND done for guard hook compat)
+jq '(.krs[] | select(.id == "4")) |= (.status = "completed" | .done = true)' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+
+# Mark KR as retrying
+jq '(.krs[] | select(.id == "4")).retry = {"phase": "RED", "count": 2, "max": 3}' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+
+# Clear retry (after success)
+jq '(.krs[] | select(.id == "4")) |= del(.retry)' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+
+# Mark KR as decomposing
+jq '(.krs[] | select(.id == "4")).decomposing = true' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+
+# Append sub-KRs (depth 1)
+jq '.krs += [{"id": "4.1", "desc": "sub description", "depth": 1, "status": "pending"}]' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+```
+
+Keep the state file in sync with every phase transition — the statusline tree reflects this file in real time.
+
+2. **Create tasks via `TaskCreate` tool** (for UI progress visualization):
+
+Create one task per KR. Use the task description `"TDD KR[n]: [KR description]"` and set initial status to `pending`.
+
+The state file is checked by the guard hook — writing the final "TDD Complete" report is **blocked** until all KRs are marked `done`. The task list provides visual progress in the user's UI.
+
+### Task description state conventions (A+B pattern)
+
+The task description is updated dynamically to reflect the current state of each KR:
+
+| State | Task description format | Task status |
+|-------|--------------------------|-------------|
+| Not started | `TDD KR[n]: [desc]` | `pending` |
+| In progress | `TDD KR[n]: [desc]` | `in_progress` |
+| Retrying RED | `TDD KR[n] [❌ RED retry M/3]: [desc]` | `in_progress` |
+| Retrying GREEN | `TDD KR[n] [❌ GREEN retry M/3]: [desc]` | `in_progress` |
+| Retrying REFACTOR | `TDD KR[n] [❌ REFACTOR retry M/3]: [desc]` | `in_progress` |
+| Being decomposed | `TDD KR[n] [decomposing]: [desc]` | `in_progress` |
+| Completed | `TDD KR[n]: [desc]` | `completed` |
+
+When recursion kicks in, **create child tasks** for each sub-KR via `TaskCreate`, using dotted notation in the ID:
+- Parent: `TDD KR3 [decomposing]: JWT token issuance` (status: in_progress)
+- Child: `TDD KR3.1: Token payload generation` (status: pending)
+- Child: `TDD KR3.2: Signing and expiry` (status: pending)
+- Child: `TDD KR3.3: Token verification` (status: pending)
+
+This creates a visual hierarchy in the task UI via the ID naming (since the Task system does not natively support parent-child nesting).
 
 ## Step 2: Loop — RED → GREEN → REFACTOR per KR
 
@@ -75,6 +145,7 @@ Spawn a subagent using the Agent tool:
 
 ```
 Agent({
+  subagent_type: "general-purpose",
   description: "TDD RED: KR[n] — [KR description]",
   prompt: `
     Write a failing test for the following requirement: [KR description]
@@ -91,7 +162,7 @@ Agent({
 
 **Do NOT proceed to GREEN until test failure is confirmed.**
 
-If the test fails to compile or fails for the wrong reason, fix and retry (max 3 attempts).
+If the test fails to compile or fails for the wrong reason, fix and retry (max 3 attempts). **Before each retry, update the task description via `TaskUpdate` to `"TDD KR[n] [❌ RED retry M/3]: [desc]"`** so the UI reflects the retry state.
 
 ### Phase 2: GREEN — Minimal Implementation
 
@@ -99,6 +170,7 @@ Spawn a separate subagent using the Agent tool:
 
 ```
 Agent({
+  subagent_type: "general-purpose",
   description: "TDD GREEN: KR[n] — [KR description]",
   prompt: `
     Write the minimal code to pass the following failing test:
@@ -116,7 +188,7 @@ Agent({
 
 **Do NOT proceed to REFACTOR until the test passes.**
 
-If the test still fails after implementation, fix and retry (max 3 attempts).
+If the test still fails after implementation, fix and retry (max 3 attempts). **Before each retry, update the task description to `"TDD KR[n] [❌ GREEN retry M/3]: [desc]"`**.
 
 ### Phase 3: REFACTOR — Improve
 
@@ -124,6 +196,7 @@ Spawn a separate subagent using the Agent tool:
 
 ```
 Agent({
+  subagent_type: "general-purpose",
   description: "TDD REFACTOR: KR[n] — [KR description]",
   prompt: `
     Evaluate the following code for refactoring:
@@ -144,26 +217,21 @@ Agent({
 })
 ```
 
+### Before each KR cycle:
+
+- **Mark the corresponding task as `in_progress`** using `TaskUpdate`.
+
 ### After each KR cycle:
 
-1. **Update the state file** to mark the KR as done:
+1. **Update the state file** (mark KR completed, using the schema patterns above):
 
 ```bash
-jq '.krs[N].done = true' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+jq '(.krs[] | select(.id == "N")) |= (.status = "completed" | .done = true)' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
 ```
 
-(Replace N with the zero-based index of the completed KR.)
+(Replace `"N"` with the KR id as a string.)
 
-2. **Report progress:**
-
-```
-## Progress
-
-- [x] KR1: [description] ✅
-- [x] KR2: [description] ✅
-- [ ] KR3: [description] ← next
-- [ ] KR4: [description]
-```
+2. **Mark the corresponding task as `completed`** using `TaskUpdate`.
 
 3. **Proceed to the next KR immediately.** Do NOT stop or wait for user input between KRs.
 
@@ -172,16 +240,19 @@ jq '.krs[N].done = true' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && 
 When a KR fails after 3 retry attempts in any phase (RED, GREEN, or REFACTOR), do NOT report to the user immediately. Instead, **recursively apply the TDD protocol** to the failed KR:
 
 1. **Analyze the failure** — identify why the KR is too complex or what specific part is failing
-2. **Decompose the failed KR into smaller sub-KRs** (max 5 sub-KRs per decomposition)
-3. **Apply RED→GREEN→REFACTOR to each sub-KR**
-4. After all sub-KRs pass, **re-run the original KR's test** to confirm it now passes
-5. Update the state file:
+2. **Update the parent task description** to `"TDD KR[n] [decomposing]: [desc]"` via `TaskUpdate`
+3. **Decompose the failed KR into smaller sub-KRs** (max 5 sub-KRs per decomposition)
+4. **Create child tasks** via `TaskCreate` for each sub-KR using dotted notation IDs (`TDD KR[n].1`, `TDD KR[n].2`, ...)
+5. **Apply RED→GREEN→REFACTOR to each sub-KR**
+6. After all sub-KRs pass, **re-run the original KR's test** to confirm it now passes, then mark the parent task as `completed`
+7. Update the state file (mark parent as decomposing, append sub-KRs — see schema patterns above):
 
 ```bash
-# Add sub-KRs to state file
-jq '.krs += [{"id": "3.1", "desc": "sub-KR description", "done": false, "depth": 1}]' \
-  /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && \
-  mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+# Mark parent KR as decomposing
+jq '(.krs[] | select(.id == "3")).decomposing = true' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
+
+# Append sub-KRs at depth 1
+jq '.krs += [{"id": "3.1", "desc": "sub-KR description", "depth": 1, "status": "pending"}]' /tmp/tdd-kr-state.json > /tmp/tdd-kr-state-tmp.json && mv /tmp/tdd-kr-state-tmp.json /tmp/tdd-kr-state.json
 ```
 
 ### Recursion limits
